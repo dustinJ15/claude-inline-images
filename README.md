@@ -62,7 +62,28 @@ host and kills any running Claude Code session.
 ```bash
 node patch.js status     # what's applied
 node patch.js remove     # exact inverse, byte-identical
+node patch.js list       # which installs were found, and which one is selected
 ```
+
+### How it finds your install
+
+`patch.js` is a standalone file patcher — it does not run inside VSCode and is
+not itself an extension. It resolves the target in this order:
+
+1. `--ext-dir <path>`
+2. `CLAUDE_CODE_EXT_DIR`
+3. **`CLAUDE_CODE_EXECPATH`** — set whenever the patcher is run from inside
+   Claude Code itself, and points at the exact install that is running, so no
+   guessing is involved. This is the most reliable route and needs no config.
+4. A scan of every known extension root, newest version winning:
+   `~/.vscode`, `~/.vscode-insiders`, `~/.vscode-oss` (VSCodium),
+   `~/.vscode-server` (Remote SSH / WSL / devcontainers), and the Flatpak path.
+   `$VSCODE_EXTENSIONS` is honoured for `--extensions-dir` and portable installs.
+
+Entries listed in the extension root's `.obsolete` file are skipped, and a
+candidate must actually contain `webview/index.js` to be considered.
+
+Run `node patch.js list` to see exactly what was found and picked.
 
 ### It does not survive Claude Code updates
 

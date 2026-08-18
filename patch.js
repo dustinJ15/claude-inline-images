@@ -158,27 +158,101 @@ const ALL_VERSIONS = Object.keys(EDITS).sort();
 // Target discovery
 // ---------------------------------------------------------------------------
 
+// Every place VSCode and its forks keep extensions. A directory that does not
+// exist is skipped, not an error — most machines will only have one of these.
+function extensionRoots() {
+  const h = os.homedir();
+  const roots = [
+    path.join(h, '.vscode', 'extensions'),                    // VSCode (all platforms)
+    path.join(h, '.vscode-insiders', 'extensions'),           // Insiders
+    path.join(h, '.vscode-oss', 'extensions'),                // VSCodium
+    path.join(h, '.vscode-server', 'extensions'),             // Remote SSH / WSL / devcontainer
+    path.join(h, '.vscode-server-insiders', 'extensions'),
+    path.join(h, '.var/app/com.visualstudio.code/data/vscode/extensions'), // Flatpak
+  ];
+  // Honoured by VSCode itself, and the escape hatch for --extensions-dir and
+  // portable installs.
+  if (process.env.VSCODE_EXTENSIONS) roots.unshift(process.env.VSCODE_EXTENSIONS);
+  return roots;
+}
+
+function versionOf(dirname) {
+  const m = dirname.match(/-(\d+)\.(\d+)\.(\d+)/);
+  return m ? [+m[1], +m[2], +m[3]] : [0, 0, 0];
+}
+
+/** Every installed, non-obsolete Claude Code extension, newest last. */
+function listInstalls() {
+  const found = [];
+  for (const root of extensionRoots()) {
+    let entries;
+    try {
+      entries = fs.readdirSync(root);
+    } catch (_) {
+      continue;                                   // root absent — normal
+    }
+    let obsolete = {};
+    try {
+      obsolete = JSON.parse(fs.readFileSync(path.join(root, '.obsolete'), 'utf8'));
+    } catch (_) { /* absent is fine */ }
+
+    for (const d of entries) {
+      if (!/^anthropic\.claude-code-/.test(d)) continue;
+      if (obsolete[d]) continue;                  // superseded, pending cleanup
+      const dir = path.join(root, d);
+      if (!fs.existsSync(path.join(dir, 'webview', 'index.js'))) continue;
+      found.push({ dir, root, name: d, version: versionOf(d) });
+    }
+  }
+  found.sort((a, b) =>
+    a.version[0] - b.version[0] || a.version[1] - b.version[1] || a.version[2] - b.version[2]);
+  return found;
+}
+
+// When this runs from inside Claude Code, the env names the exact install that
+// is running -- far better than guessing. Walk up from the binary to the
+// extension root.
+function fromExecPath(execPath) {
+  let d = path.dirname(execPath);
+  for (let i = 0; i < 6; i++) {
+    if (fs.existsSync(path.join(d, 'webview', 'index.js'))) return d;
+    const up = path.dirname(d);
+    if (up === d) break;
+    d = up;
+  }
+  return null;
+}
+
+/**
+ * Resolve which install to patch. Order, most authoritative first:
+ *   1. explicit argument (CLI --ext-dir)
+ *   2. CLAUDE_CODE_EXT_DIR
+ *   3. CLAUDE_CODE_EXECPATH — set when run from inside Claude Code
+ *   4. scan of all known extension roots, newest version wins
+ */
 function findExtensionDir(explicit) {
-  if (explicit) return explicit;
-  const root = path.join(os.homedir(), '.vscode', 'extensions');
-  let obsolete = {};
-  try {
-    obsolete = JSON.parse(fs.readFileSync(path.join(root, '.obsolete'), 'utf8'));
-  } catch (_) { /* absent is fine */ }
+  const pick = explicit || process.env.CLAUDE_CODE_EXT_DIR;
+  if (pick) {
+    if (!fs.existsSync(path.join(pick, 'webview', 'index.js'))) {
+      throw new Error(pick + ' does not look like a Claude Code extension (no webview/index.js)');
+    }
+    return pick;
+  }
 
-  const cands = fs.readdirSync(root)
-    .filter((d) => /^anthropic\.claude-code-/.test(d))
-    .filter((d) => !obsolete[d])
-    .filter((d) => fs.existsSync(path.join(root, d, 'webview', 'index.js')));
+  if (process.env.CLAUDE_CODE_EXECPATH) {
+    const d = fromExecPath(process.env.CLAUDE_CODE_EXECPATH);
+    if (d) return d;
+  }
 
-  if (!cands.length) throw new Error('no active anthropic.claude-code extension found under ' + root);
-
-  cands.sort((a, b) => {
-    const v = (s) => (s.match(/-(\d+)\.(\d+)\.(\d+)/) || [0, 0, 0, 0]).slice(1).map(Number);
-    const [a1, a2, a3] = v(a), [b1, b2, b3] = v(b);
-    return a1 - b1 || a2 - b2 || a3 - b3;
-  });
-  return path.join(root, cands[cands.length - 1]);
+  const installs = listInstalls();
+  if (!installs.length) {
+    throw new Error(
+      'no active anthropic.claude-code extension found. Searched:\n' +
+      extensionRoots().map((r) => '  ' + r).join('\n') +
+      '\nPass --ext-dir <path> or set CLAUDE_CODE_EXT_DIR if it lives elsewhere.'
+    );
+  }
+  return installs[installs.length - 1].dir;
 }
 
 function occurrences(hay, needle) {
@@ -281,19 +355,34 @@ function remove(extDir) {
   return { changed: true, reason: 'removed v' + present.join(',v'), extDir: dir };
 }
 
-module.exports = { apply, remove, status, findExtensionDir, VERSION, EDITS, occurrences };
+module.exports = {
+  apply, remove, status, findExtensionDir, listInstalls, extensionRoots,
+  VERSION, EDITS, occurrences,
+};
 
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
 
 if (require.main === module) {
-  const cmd = process.argv[2] || 'status';
+  const argv = process.argv.slice(2);
+  const i = argv.indexOf('--ext-dir');
+  const dir = i >= 0 ? argv[i + 1] : undefined;
+  if (i >= 0) argv.splice(i, 2);
+  const cmd = argv[0] || 'status';
+
+  const USAGE = 'usage: node patch.js [apply|remove|status|list] [--ext-dir <path>]';
+
   try {
-    const out = cmd === 'apply' ? apply()
-      : cmd === 'remove' ? remove()
-      : cmd === 'status' ? status()
-      : (() => { throw new Error('usage: node patch.js [apply|remove|status]'); })();
+    const out = cmd === 'apply' ? apply(dir)
+      : cmd === 'remove' ? remove(dir)
+      : cmd === 'status' ? status(dir)
+      : cmd === 'list' ? {
+          searched: extensionRoots(),
+          installs: listInstalls().map((x) => ({ dir: x.dir, version: x.version.join('.') })),
+          selected: (() => { try { return findExtensionDir(dir); } catch (_) { return null; } })(),
+        }
+      : (() => { throw new Error(USAGE); })();
     console.log(JSON.stringify(out, null, 2));
   } catch (e) {
     console.error('ERROR: ' + e.message);

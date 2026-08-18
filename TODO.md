@@ -53,8 +53,13 @@ Without this the patch dies at every Claude Code update. Model it on
 - [ ] Test against more than one Claude Code version. Only 2.1.234 is confirmed.
 - [ ] Check whether VSCode ever flags the modified bundle (corrupt-install
       warning). Not observed so far, but not deliberately tested.
-- [ ] `patch.js` picks the highest-versioned non-obsolete install. Verify that's
-      right when several are live.
+- [ ] Install discovery now searches VSCode / Insiders / VSCodium /
+      `.vscode-server` / Flatpak roots and prefers `CLAUDE_CODE_EXECPATH`, but
+      only the plain `~/.vscode` path has actually been exercised. Test the
+      others — particularly `.vscode-server`, where Remote/WSL users live.
+- [ ] When several installs are live, the highest version wins. Verify that's
+      the right rule (it may not be, if an older one is the running window).
+- [ ] Windows path handling is untested end to end.
 
 ## plot.py
 
