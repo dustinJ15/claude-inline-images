@@ -191,7 +191,7 @@ will refuse loudly rather than corrupt anything.
 | 2 | relative paths → workspace files | code written, statically verified, **never applied live** |
 | 3 | companion extension, auto-reapply | **not started** |
 
-See [TODO.md](TODO.md).
+See [TODO.md](TODO.md), and [HANDOFF.md](HANDOFF.md) if you are picking this up fresh.
 
 ## License
 
