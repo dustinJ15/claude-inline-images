@@ -1,0 +1,11 @@
+{
+  "name": "claude-inline-images",
+  "version": "0.2.0",
+  "description": "Render inline images in the Claude Code VSCode chat panel, plus a token-cheap SVG plotter",
+  "license": "MIT",
+  "main": "patch.js",
+  "bin": { "claude-inline-images": "patch.js" },
+  "scripts": { "test": "node test/verify.js" },
+  "engines": { "node": ">=18" },
+  "keywords": ["claude-code", "vscode", "webview", "markdown", "images", "svg"]
+}

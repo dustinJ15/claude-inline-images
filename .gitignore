@@ -1,0 +1,7 @@
+node_modules/
+*.cii-tmp
+*.log
+out/
+*.vsix
+__pycache__/
+*.pyc
