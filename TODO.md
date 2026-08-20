@@ -48,9 +48,14 @@ headless, synthetic fixtures only).
       never file restore (see README → "How the patch stays safe")
 - [x] Finish with `workbench.action.webview.reloadWebviewAction` so no window
       reload is needed
-- [ ] **Load it in a real editor.** Everything above is asserted against
-      fixtures; none of it has run inside VS Code. Until that happens, updates
-      still need a manual `node patch.js apply`.
+- [x] **Load it in a real editor.** Done 2026-08-20 via a symlink into
+      `~/.vscode/extensions/`. Its status command reported `patched at v2
+      (current); KaTeX patch also present` against the real install — proving
+      symlinked activation, patcher resolution through the symlink, and
+      registry-based target resolution all work outside the fixtures.
+- [ ] **Watch the repair actually happen.** The install was already patched, so
+      nothing was repaired. Needs a genuinely unpatched or half-patched install:
+      `node patch.js remove` + restart, or KaTeX's re-patch + restart.
 - [ ] Handle the ordering race: if both this and KaTeX patch on startup, confirm
       the result is correct regardless of which wins (the static assertion is in
       place; the live ordering needs a real machine)

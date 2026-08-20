@@ -218,14 +218,12 @@ Nothing here is a thing to work around. Ask, then wait.
 
    **On the next window restart, read the outcome like this:**
 
-   | You see | Meaning |
-   |---|---|
-   | nothing at all | **expected success** — the install is already v2 and current, so the extension activates and correctly does nothing. Confirm with *Claude Inline Images: Show Patch Status* |
-   | the command is missing from the palette | VS Code did not scan the symlinked folder — its `extensions.json` registry is authoritative on 1.13x. Fall back to copying the folder and vendoring `patch.js` at the copy's root |
-   | notification: `patch.js not found (looked in …)` | the extension host ran with `--preserve-symlinks`, so `__dirname` stayed the symlink path and the two-levels-up lookup missed. Same fallback. **Nothing was patched** — `loadPatcher()` throws before any write |
-
-   Only the first row means it works. The other two are safe failures: both
-   happen before any file is written.
+   **Confirmed working 2026-08-20.** After a window restart, *Claude Inline
+   Images: Show Patch Status* reported `patched at v2 (current); KaTeX patch
+   also present`, sourced from the extension. Neither feared failure mode
+   occurred: VS Code scans symlinked extension folders, and the host does not
+   run with `--preserve-symlinks`, so `loadPatcher()`'s two-levels-up lookup
+   resolves. The copy-and-vendor fallback is therefore not needed.
 
    Then the three scenarios, in rising order of value:
    a. ordinary startup — nothing happens, images still render;

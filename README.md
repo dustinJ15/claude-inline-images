@@ -132,8 +132,11 @@ Simulating the second one found a real defect: a KaTeX re-patch leaves the tree
 **half** patched — `webview/index.js` pristine, our `extension.js` edits intact —
 which `patch.js` reports as unpatched while refusing to re-apply over the four
 surviving anchors. The extension now lifts partial versions before patching.
-It is still **never loaded in a real editor**, so re-applying after an update is
-a manual step today. See [TODO.md](TODO.md).
+It **loads in a real editor** as of 2026-08-20 — installed by symlinking
+`extension/` into `~/.vscode/extensions/`, after which its status command
+reported the live install's patch state correctly. What has not been exercised
+live is the repair itself: that needs an install actually missing the patch. See
+[TODO.md](TODO.md).
 
 ## Usage
 
@@ -406,7 +409,7 @@ will refuse loudly rather than corrupt anything.
 |---|---|---|
 | 1 | `data:` URIs render inline | **working, verified live** |
 | 2 | relative paths → workspace files | code written, statically verified, **never applied live** |
-| 3 | companion extension, auto-reapply | code written, both recovery scenarios simulated, **never loaded in a real editor** |
+| 3 | companion extension, auto-reapply | **loads and reports correctly in a real editor** (2026-08-20); auto-repair simulated only |
 
 See [TODO.md](TODO.md), and [HANDOFF.md](HANDOFF.md) if you are picking this up fresh.
 

@@ -7,7 +7,7 @@ patcher; it does not reimplement or copy the edit table.
 
 **Blocked by:** 03 (the duplicate is still on disk; the extension does not call it).
 
-**Status:** awaiting-user — built and covered by headless tests; one box needs a human looking at a real panel
+**Status:** awaiting-user — loads and reports correctly in a real editor (2026-08-20); the auto-repair box needs an actually-unpatched install, i.e. ticket 05
 
 - [x] A patched install starts up with nothing changed and nothing shown. (`test/extension.test.js`: contents *and* mtimes unchanged, no notification, no reload.)
 - [ ] An unpatched install is patched automatically and the images work afterwards. Patching is asserted; **"the images work afterwards" needs a human looking at the panel** and cannot be closed from code.
@@ -31,6 +31,38 @@ test/extension.test.js        33 assertions, node only, synthetic fixtures in a 
 The edit table is not duplicated: the extension `require`s the repo's `patch.js`
 (vendoring beside `src/` is supported for packaging, still one file). A test
 asserts no anchor or injected fragment appears anywhere under `extension/src/`.
+
+## Findings
+
+**2026-08-20 — it loads in a real editor.** Installed by symlink:
+
+```
+ln -sfn ~/projects/claude-inline-images/extension \
+        ~/.vscode/extensions/claude-inline-images-0.1.0
+```
+
+After a window restart, *Claude Inline Images: Show Patch Status* returned:
+
+> Claude inline images: patched at v2 (current); KaTeX patch also present —
+> /home/dustin/.vscode/extensions/anthropic.claude-code-2.1.234-linux-x64
+>
+> *Source: Claude Inline Images*
+
+That single notification establishes several things that had only ever been
+asserted against fixtures: VS Code scans and activates a **symlinked** extension
+folder (its `extensions.json` registry is not a barrier); `loadPatcher()`
+resolves `patch.js` two levels up through the symlink, so the extension host
+does **not** run with `--preserve-symlinks`; registry-based target resolution
+returns the same install `patch.js` finds standalone; and the KaTeX detection is
+correct against a real co-installed extension.
+
+It also exercised the first ticked box for real: a patched, current install
+started up and the extension did nothing at all.
+
+**Still unticked, and this notification does not close it.** The install was
+already patched, so no repair path ran. "An unpatched install is patched
+automatically and the images work afterwards" needs the install to actually be
+missing the patch first — that is ticket 05.
 
 ## Left for a human
 
