@@ -1,68 +1,77 @@
-# Handoff — turning this into a real VSCode extension
+# Handoff
 
-You are picking up a working proof of concept and making it a legitimate,
-publishable extension. Read [CLAUDE.md](CLAUDE.md) for the rules that keep the
-patch safe, [README.md](README.md) for the root cause, [TODO.md](TODO.md) for the
-full backlog. This document is the current state and the plan.
+You are picking up a working proof of concept and turning it into a clean,
+credible repo. Read [CLAUDE.md](CLAUDE.md) for the rules that keep the patch
+safe, [README.md](README.md) for the root cause, [specs/](specs/) for the work.
+This document is the current state, the goal, and how to run the loop.
 
 ---
 
-## 1. State right now — read this before touching anything
+## 0. How to work this repo
 
-```
-$ node patch.js status
-{
-  "extDir": ".../anthropic.claude-code-2.1.234-linux-x64",
-  "patchedVersions": ["1"],     <-- the LIVE install is at v1
-  "current": false,             <-- repo ships v2
-  "katexPatched": true
-}
-```
+The mode that works here is **supervisor + subagents**, one spec track per
+agent, TDD throughout. If the user says "read HANDOFF.md" or "run the loop",
+this is what they mean:
 
-**The live install and this repo disagree on purpose.** v1 (data: URIs) was
-applied and confirmed rendering in a real panel. v2 (relative paths) was written
-afterwards and has **never been applied to a running webview** — only statically
-verified. Running `node patch.js apply` upgrades v1 → v2 and *could* break a
-currently-working setup. `node patch.js remove` restores pristine.
+1. Read [specs/README.md](specs/README.md), then every ticket's
+   `**Status:**` line: `grep -H '^\*\*Status:' specs/*/tickets/*.md`
+2. Pick the tickets that are `ready-for-agent` **and** not gated on a human
+   (see §3). Group them so that **no two concurrent agents edit the same file** —
+   this is the one hard scheduling constraint. `plot.py`, `patch.js`, and
+   `README.md` each have exactly one owner at a time.
+3. Launch them as parallel subagents (opus, medium reasoning or better). Give
+   each one: read CLAUDE.md first, the ticket, TDD explicitly, the file
+   exclusion list, and the two hard prohibitions in §2.
+4. When one lands, run the suite yourself — `npm test` — before launching
+   whatever it unblocked. Don't take a subagent's "all green" on faith.
+5. Each agent updates its own ticket file: tick only genuinely satisfied boxes,
+   set `**Status:**` to `done` / `awaiting-user` / `blocked` **with a reason**.
+   Never tick a box the ticket says needs a human.
+6. Stop when everything left is gated on the user. Hand back a list of the
+   specific actions only they can take.
 
-| Stage | What | Evidence |
-|-------|------|----------|
-| 1 | `data:image/*` renders inline | **Confirmed live.** A human looked at a rendered SVG in the panel. |
-| 2 | `![](plots/x.png)` relative paths | Parses, anchors unique, round-trips byte-identical. **Never rendered.** |
-| 3 | Companion extension | **Not started.** No code exists. |
+Serialization that worked last time: plot-py 01 (tests) → 03+04 → 05+06, since
+all three waves edit `plot.py`. workspace-relative-images 01 must land before
+anything touches the live install, because it *is* the rollback net.
 
-`node test/verify.js` — 29 assertions, all green. Run it after every change.
+## 1. Goal — and what it is not
 
-## 2. Environment it was built against
+**Goal: a repo that is a pleasure to land on.** Honest README, real tests, clean
+history, every claim marked verified-live or statically-checked. A portfolio
+piece.
 
-- `anthropic.claude-code` **2.1.234** (linux-x64), VSCode **1.133.0**, Fedora 44
-- Panel mode: `"claudeCode.preferredLocation": "panel"` → `createWebviewPanel("claudeVSCodePanel", …)`
-- `nuriyev.claude-code-katex` **2.1.1** is installed and patches **the same call
-  site**. Keeping it working is a hard requirement, not a nice-to-have. Its
-  manifest is the reference design for stage 3:
+**Not a goal right now: publishing to the VS Code Marketplace.** Do not work
+toward it, do not optimise packaging for it. If a `.vsix` is ever wanted it goes
+out as a GitHub release. [specs/companion-extension/ticket 08](specs/companion-extension/tickets/08-package-and-publish.md)
+stays `blocked` and out of scope; its manifest-completeness and candid-README
+points are still worth doing *as repo quality*, just not as a store submission.
 
-  ```json
-  { "activationEvents": ["onStartupFinished"],
-    "extensionDependencies": ["anthropic.claude-code"],
-    "scripts": { "vscode:uninstall": "node ./uninstall-hook.js" } }
-  ```
+The reasoning is recorded in
+[decision-publication.md](specs/companion-extension/decision-publication.md) and
+is worth knowing: Microsoft's policy is silent on modifying another publisher's
+extension, but **Anthropic's licence and reverse-engineering terms are the real
+constraint**. `nuriyev.claude-code-katex` doing the same thing is tolerance, not
+permission. Don't cite it as cover in the README.
 
-Only this one configuration has been exercised. Everything about other
-platforms, VSCode versions, and Claude Code versions is unverified.
-
-## 3. Two constraints that will shape how you work
+## 2. Two constraints that will shape how you work
 
 ### You cannot verify rendering with code
 
 Static tests prove the bundle parses and the strings are right. They cannot
 prove the webview draws an image. **Only a human looking at the panel can
-confirm that.** Budget for that round trip; don't declare stage 2 done without it.
+confirm that.** Budget for that round trip; don't close a ticket that says it
+needs a human.
 
-The verification loop:
+The loop:
 
-1. `node patch.js apply`
-2. `Ctrl+Shift+P` → **Developer: Reload Webviews**
-   (*not* Reload Window — that restarts the extension host and kills the session)
+1. `node patch.js apply` *(the user runs this — see below)*
+2. `Ctrl+Shift+P` → **Developer: Reload Webviews** for anything in
+   `webview/index.js`. For v2's `extension.js` edits — the meta tag and the
+   widened `localResourceRoots` — a webview reload is **not enough**; the
+   extension host only evaluates `extension.js` at startup, so it takes
+   **Developer: Reload Window** or a restart, and that kills the session.
+   Budget for it. Learned on 2026-08-18; details in
+   [ticket 02](specs/workspace-relative-images/tickets/02-confirm-webview-uri-passes-csp.md).
 3. Emit a small image in a chat message and ask the user what they see.
 
 Read the result carefully — the three outcomes mean different things:
@@ -77,114 +86,228 @@ That third row cost real debugging time. A literal space in a markdown link
 destination makes CommonMark not emit an image node at all. It is not a patch
 failure and looks nothing like one.
 
-### The permission classifier will block you
+### The permission classifier may block you — it depends on the session
 
-Writes into `~/.vscode/extensions/**` and `~/.claude/**` are denied to agents,
-as is editing `settings.json` to grant yourself permission. **Do not hunt for a
-phrasing that gets through.** Ask the user to run the command, or to add an
-allow-rule via `/permissions`. Repo-local writes under `~/projects` are fine.
+Writes into `~/.vscode/extensions/**` and `~/.claude/**` are *often* denied to
+agents, and editing `settings.json` to grant yourself permission always should
+be. **Do not hunt for a phrasing that gets through** — if you are denied, ask
+the user to run the command.
 
-## 4. Task A — verify stage 2 before building anything on it
+But do not assume the denial either. This document previously stated flatly
+that agents are blocked; on **2026-08-19** an agent in an auto-mode session ran
+`node install-skill.js` successfully, writing `~/.claude/skills/inline-plots/`.
+The outcome is a function of the session's permission mode, not a fixed
+property of the path. **Try the command, then report what actually happened** —
+quoting this file's old claim instead of testing it is how the stale version
+survived as long as it did. Repo-local writes
+are fine. Tests must use synthetic fixtures in a temp dir — `test/verify.js` has
+a `makeFixture()` helper built from `P.EDITS`, so fixture anchors cannot drift
+from the real ones. Never run the patcher against the live install.
 
-Do not wrap unverified code in an extension. Confirm v2 works first.
-
-- [ ] Have the user run `node patch.js apply`, then reload webviews.
-- [ ] Confirm `<meta name="claude-ws-base">` actually appears in the webview
-      HTML and holds a real URI (Developer: Open Webview Developer Tools).
-- [ ] Emit `![t](scratch/plots/test.png)` against a real file and confirm it draws.
-- [ ] **Most likely failure point:** whether `asWebviewUri`'s host is covered by
-      the CSP's `${cspSource}` once `localResourceRoots` is widened. If it is
-      not, fall back to writing images into `<ext>/resources/`, which is already
-      an allowed root and needs no `extension.js` change at all.
-- [ ] Regression check in the same message: KaTeX math still typesets, and a
-      `Read` of a PNG still shows its normal thumbnail pill (not stretched — see
-      the specificity trap in CLAUDE.md).
-- [ ] If v2 fails and can't be fixed quickly, `node patch.js remove` then
-      re-apply v1 so the user keeps a working setup while you iterate.
-
-## 5. Task B — the companion extension
-
-The whole point: **the patch dies at every Claude Code update**, because updates
-install into a new versioned directory. Today recovery is manual.
-
-Proposed layout — keep the patcher as the single source of truth, don't fork the
-edit logic:
+## 3. State
 
 ```
-extension/
-  package.json        manifest
-  src/extension.js    activate() -> ensurePatched()
-  src/uninstall.js    vscode:uninstall hook
-  .vscodeignore
-  CHANGELOG.md
-  icon.png            128x128
-patch.js              <- required by the extension, NOT duplicated
+$ node patch.js status
+{ "extDir": ".../anthropic.claude-code-2.1.234-linux-x64",
+  "patchedVersions": ["1"],   <-- the LIVE install is at v1
+  "current": false,           <-- repo ships v2
+  "latestVersion": "2", "knownVersions": ["1","2"], "katexPatched": true }
 ```
 
-Core behaviour:
+*(The status block above is pre-2026-08-18. The live install has since been
+upgraded: `patchedVersions: ["2"]`, `current: true`.)*
 
-- [ ] `activationEvents: ["onStartupFinished"]`,
-      `extensionDependencies: ["anthropic.claude-code"]`
-- [ ] Resolve the target with
-      `vscode.extensions.getExtension('anthropic.claude-code').extensionPath`
-      and pass it to `apply(extDir)` — more reliable than the standalone
-      heuristics, which exist only for CLI use.
-- [ ] Re-apply whenever the version stamp is absent. This is what makes it
-      self-healing when KaTeX restores from `index.js.katex-bak` and clobbers us.
-- [ ] Call `workbench.action.webview.reloadWebviewAction` **only when a patch was
-      actually applied.** Reloading on every startup is disruptive.
-- [ ] Uninstall hook does **targeted string removal, never file restore** (see
-      CLAUDE.md for why a backup is actively dangerous here).
-- [ ] Surface failures as a notification. Silent no-op is the worst outcome —
-      the user sees `[Image]` and has no idea why.
-- [ ] Contribute commands: apply / remove / status, and a setting to disable
-      auto-patching.
-- [ ] Handle the startup race with KaTeX: both patch on `onStartupFinished`.
-      Verify the result is correct regardless of which wins, in both orders.
+**The live install is now at v2**, applied 2026-08-18, webviews reloaded, and a
+`data:` URI SVG confirmed rendering in the panel. That is the first time v2 has
+been looked at in a real editor, and it establishes that v2 did not regress
+what v1 did. It does **not** touch v2's relative-path half, which remains the
+unrendered claim.
 
-## 6. Task C — what makes it "legit"
+| Stage | What | Evidence |
+|-------|------|----------|
+| 1 | `data:image/*` renders inline | **Confirmed live, under both v1 and v2.** A human looked at a rendered SVG in the panel, 2026-08-18. |
+| 2 | `![](plots/x.png)` relative paths | Parses, anchors unique, round-trips byte-identical. **Still never rendered.** |
+| 3 | Companion extension | **Built and headless-tested, including both loss-and-recovery scenarios (2026-08-20). Never run in a real editor.** |
 
-- [ ] Manifest completeness: `displayName`, `description`, `categories`,
-      `repository`, `bugs`, `icon`, `license`, `engines.vscode`
-- [ ] `CHANGELOG.md`, and a README that renders well on the Marketplace
-      (the current one is written for GitHub — check the image/table rendering)
-- [ ] Package with `@vscode/vsce`; verify the `.vsix` contents are minimal
-- [ ] Integration tests with `@vscode/test-electron` — install into a scratch
-      VSCode, patch, assert the bundle changed, assert `remove` restores it
-- [ ] GitHub Actions running `node test/verify.js` (it already skips the bundle
-      checks cleanly when no Claude Code install is present, so CI works)
-- [ ] Publisher identity on the Marketplace, and decide the extension ID
-- [ ] State plainly in the README that it modifies another extension's files,
-      and how to fully undo it. Users deserve to know before installing.
+Rollback now exists: `node patch.js apply 1` returns the live install to the
+known-good v1 without going through unpatched. That was the gating ticket for
+everything in spec 1.
 
-### Open question you must resolve with the user
+### Tests
 
-**Is publishing this to the Marketplace acceptable?** It modifies another
-publisher's extension on disk. `nuriyev.claude-code-katex` is precedent that it
-is at least tolerated, but confirm against current Marketplace policy before
-publishing. If it is not acceptable, ship as a GitHub release + `npx` CLI
-instead — the patcher works standalone today.
+`npm test` runs all five suites. Keep them all green; run the whole thing, not
+just the one you touched.
 
-There is also a real chance this becomes unnecessary. The fix upstream is a
-one-line `urlTransform`, and the extension already contains a dead `data:` branch
-in its `img` override, which suggests inline images were *intended* to work.
-**Filing an upstream issue may be the highest-value action in this whole repo.**
-Related: [claude-code#54546](https://github.com/anthropics/claude-code/issues/54546)
-tracks inline images in the terminal UI — a different surface, same underlying want.
+| Suite | Command | Covers |
+|---|---|---|
+| patch | `npm run test:patch` | edit table, security, KaTeX coexistence, round trips, version targeting |
+| extension | `npm run test:extension` | activate/self-heal/uninstall against fixtures, `vscode` injected |
+| skill | `npm run test:skill` | skill content rules + installer idempotence |
+| plot | `npm run test:plot` | 161 tests + a 16-plot byte baseline with a growth threshold |
+| doctor | `npm run test:doctor` | one-command health check, against fixtures only |
 
-## 7. Gotchas, condensed
+The plot baseline is the interesting one: the eight original reference plots are
+asserted **byte-identical**, not within tolerance, so a new feature cannot
+quietly make every existing plot more expensive. Regenerate deliberately with
+`python3 test/test_plot.py --update-baseline`.
+
+### Ticket board
+
+`done` — workspace-relative-images 01; agent-discovery 01, 02;
+companion-extension 01; plot-py 01, 03, 04, 05, 06.
+
+`awaiting-user` — companion-extension 02, 03, 04, 06, 07; plot-py 02.
+These are built and tested; what is missing is a human action, listed in §4.
+
+**plot-py 02 update (2026-08-18):** the experiment is run and the feature is
+built. The embedded media query is *not* honoured — a dark editor rendered the
+`LIGHT` probe — so `--theme auto|dark|light` shipped instead, `auto` unchanged
+and byte-identical, 120 tests. The one box left needs a human to look at a
+`--theme light` plot on a light background; the colours are reasoned, not seen.
+
+**2026-08-20 wave.** plot-py 07 (vectors/arrows) shipped — `--vec`, equal aspect,
+39.5B/vector, 161 tests. A new `doctor` spec shipped: `node doctor.js` checks
+install discovery, patch currency, per-file skill staleness, and *executes*
+`plot.py`; 30 assertions. companion-extension 05 was simulated headlessly and
+**found a real defect** — see the half-patch gotcha in §6 — now fixed, 62
+assertions. Suites: five, all green.
+
+`ready-for-agent` but human-gated — workspace-relative-images 02–06 and
+companion-extension 05 all need the panel or a real editor restart. An agent can
+prepare and diagnose, but cannot close them.
+
+`blocked` — agent-discovery 04 (needs spec 1 confirmed live, *not* merely
+written); companion-extension 08 (out of scope, §1).
+
+## 4. What only the user can do
+
+Nothing here is a thing to work around. Ask, then wait.
+
+1. ~~**`node patch.js apply`** → **Developer: Reload Webviews** → look at the
+   panel.~~ **Done 2026-08-18.** v1 → v2, reloaded, `data:` URI rendered. This
+   did *not* exercise relative paths, so spec 1 is still open — see §5.1.
+   `node patch.js apply 1` remains the way back if v2 misbehaves.
+2. ~~**`rm -rf ~/.claude/inline-images`**~~ — **Done 2026-08-18.** The stale
+   v1 duplicate of the patcher is gone.
+3. **`node install-skill.js`** — run 2026-08-18, and re-run 2026-08-19 after
+   `--theme` shipped, because the installed `plot.py` had gone stale while
+   `SKILL.md` stayed current (the installer versions each file separately, so
+   "installed" does not imply "current" — check `--status`, not just presence).
+   Re-run again 2026-08-20 after `--vec` shipped. **The rule this keeps
+   teaching: any `plot.py` change makes the installed copy stale, and the
+   consumer repos run the installed copy, not this one.** `node doctor.js` now
+   catches it automatically.
+
+   **Still outstanding:** a fresh session **in an unrelated repo**, to confirm
+   the skill fires unprompted. Testing it in this repo proves nothing. Note
+   this got harder to measure on 2026-08-19: the user's two course repos
+   (`~/school/calculus-2`, `~/school/linear-algebra`) now carry explicit
+   CLAUDE.md sections telling the agent to plot. Those repos are a good test of
+   *the workflow* but no longer a clean test of *unprompted discovery* — for
+   that, use a repo with no such instruction.
+4. ~~**Paste the theming probe.**~~ **Done 2026-08-18** — result and caveats in
+   [theming-experiment.md](specs/plot-py/theming-experiment.md), feature
+   shipped. Optional leftover: step 4 of that document, the OS-appearance flip,
+   which would separate "fixed light default" from "follows the desktop". It
+   changes nothing about the feature; it only makes the recorded cause exact.
+5. **Load `extension/` into a real editor.** *(Install done 2026-08-20 — the
+   user ran `ln -sfn ~/projects/claude-inline-images/extension
+   ~/.vscode/extensions/claude-inline-images-0.1.0`. Symlink verified; manifest
+   and `main` both resolve. NOT yet restarted, so nothing about loading is
+   confirmed.)*
+
+   **On the next window restart, read the outcome like this:**
+
+   | You see | Meaning |
+   |---|---|
+   | nothing at all | **expected success** — the install is already v2 and current, so the extension activates and correctly does nothing. Confirm with *Claude Inline Images: Show Patch Status* |
+   | the command is missing from the palette | VS Code did not scan the symlinked folder — its `extensions.json` registry is authoritative on 1.13x. Fall back to copying the folder and vendoring `patch.js` at the copy's root |
+   | notification: `patch.js not found (looked in …)` | the extension host ran with `--preserve-symlinks`, so `__dirname` stayed the symlink path and the two-levels-up lookup missed. Same fallback. **Nothing was patched** — `loadPatcher()` throws before any write |
+
+   Only the first row means it works. The other two are safe failures: both
+   happen before any file is written.
+
+   Then the three scenarios, in rising order of value:
+   a. ordinary startup — nothing happens, images still render;
+   b. after `node patch.js remove` + window restart — recovers unprompted;
+   c. **after triggering KaTeX's own re-patch + window restart** — this is the
+   path that was broken until 2026-08-20 and is the one worth testing.
+   If an error notification appears, paste it verbatim into ticket 05; it names
+   the failing anchor.
+6. **Post the upstream issue** —
+   [upstream-issue.md](specs/companion-extension/upstream-issue.md), ready to
+   paste, verified against the real bundle. Tracker:
+   https://github.com/anthropics/claude-code/issues
+   **This is plausibly the highest-value action in the repo:** the fix upstream
+   is one property, and if it lands, specs 1 and 3 both become unnecessary.
+
+While a panel is open, three freebies worth one glance: a labelled plot has
+never been seen rendered, neither has a Riemann plot, and neither has a
+`--theme light` or `--theme dark` plot against its intended background.
+
+## 5. Next work, in order
+
+1. **Spec 1 end to end**, once the user has done §4.1. Tickets 02→03→04→05→06:
+   prove the workspace URI passes CSP, render a relative-path image, decide and
+   *document* how much of the workspace the panel may read, settle multi-root,
+   then measure the real per-image token cost and correct the README. Most
+   likely failure point: whether `asWebviewUri`'s host is covered by
+   `${cspSource}` once `localResourceRoots` widens. If not, fall back to writing
+   images into `<ext>/resources/` — already an allowed root, needs no
+   `extension.js` edit at all. Say so plainly in the docs rather than shipping an
+   unverified claim.
+2. **agent-discovery 04** — rewrite the skill's emit guidance for relative paths
+   once, and only once, spec 1 is confirmed *rendering*. One recommended form,
+   not two equally good ones.
+3. **Repo polish, as its own pass** — CI running `npm test` (the patch suite
+   already skips bundle checks cleanly when no Claude Code install is present),
+   a top-level README that opens with what this is and what is verified, and the
+   manifest/CHANGELOG completeness points from ticket 08 treated as quality work
+   rather than store prep.
+
+## 6. Gotchas, condensed
 
 - Never read `webview/index.js` whole — 5MB minified, it will blow your context.
-  Grep with bounded context; there's a recipe in CLAUDE.md.
+  Grep with bounded context; recipe in CLAUDE.md.
 - Insert **after** `remarkPlugins:[…]`, never right after the `{` — KaTeX's
   anchor regex requires `{remarkPlugins:[` and inserting before it silently
-  disables KaTeX.
+  disables KaTeX. `test/verify.js` now asserts, per version, that KaTeX's regex
+  still matches *and* that its captured groups are identical to pristine.
 - Don't anchor on the viewport `<meta>` — it appears **twice**; the second is the
   plan-preview webview. Use the CSP line.
 - Style images inline, not via `index.css` — `img[src^="data:"]` (0,1,1) beats
   `.thumbIcon_*` (0,1,0) and breaks the tool-result thumbnail pill.
 - Never widen `urlTransform` to identity. Upstream blocks external image URLs to
   prevent exfiltration via markdown image URLs; keep the security assertions green.
+- **A KaTeX re-patch leaves the tree HALF patched, not unpatched.** KaTeX
+  restores only `webview/index.js` from its own pristine copy; our `extension.js`
+  edits survive. `patch.js` counts a version present only when *every* edit is
+  present, so it reports `patchedVersions: []` while four `extension.js` anchors
+  are still injected — and a bare `apply()` then aborts with
+  `anchor occurs 0x, expected 4x`. The extension handles this via
+  `liftPartialVersions()`, which reverses whatever fragments are actually on disk
+  before patching. Found 2026-08-20 by simulating the clobber; every earlier test
+  started from a fully patched or fully pristine tree and could not see it.
+- Keep **no backup file**, ever. Any backup may capture a KaTeX-patched bundle,
+  and restoring it later resurrects a stale KaTeX build. `remove()` is the
+  inverse, and the extension's uninstall hook is tested to create no copy at all.
 - `A_LRR` and `A_CSP` embed the minified alias `Lt` and CSP template vars
-  `${p} ${f} ${m} ${u} ${g}`. These **will** break on a rebuild. Consider regex
-  anchors with captured identifiers, as KaTeX does.
+  `${p} ${f} ${m} ${u} ${g}`. These **will** break on a Claude Code rebuild.
+  Consider regex anchors with captured identifiers, as KaTeX does.
+- In `plot.py`, bytes are tokens. Every text site goes through `esc()`; every new
+  path goes through the same simplification pipeline. Measure, don't assume — the
+  Riemann rectangles ship as subpaths of one `<path>` because that measured
+  16.7B each against 56.8B for `<rect>` elements, the attribute spaces becoming
+  `%20` in the URI.
+
+## 7. Environment it was built against
+
+- `anthropic.claude-code` **2.1.234** (linux-x64), VSCode **1.133.0**, Fedora 44
+- Panel mode: `"claudeCode.preferredLocation": "panel"` →
+  `createWebviewPanel("claudeVSCodePanel", …)`
+- `nuriyev.claude-code-katex` **2.1.1** is installed and patches **the same call
+  site**. Keeping it working is a hard requirement, not a nice-to-have.
+
+Only this one configuration has been exercised. Everything about other
+platforms, VSCode versions, and Claude Code versions is unverified — and the
+README should keep saying so.
