@@ -1,0 +1,24 @@
+{
+  "_comment": "Recorded data-URI byte sizes for the reference plots. Regenerate deliberately with: python3 test/test_plot.py --update-baseline",
+  "plots": {
+    "asymptote": 2366,
+    "declared-break": 2264,
+    "explicit-yrange": 2014,
+    "labelled-axes": 2926,
+    "param-lemniscate": 2566,
+    "polar-circle": 2431,
+    "polar-spiral": 2947,
+    "riemann-midpoint": 2765,
+    "scatter-only": 1980,
+    "scatter-overlay": 2314,
+    "several-curves": 4371,
+    "shaded-region": 3046,
+    "single-curve": 2619,
+    "tan-asymptotes": 2673,
+    "vector-addition": 2512,
+    "vector-pair": 2230
+  },
+  "tolerance_bytes": 8,
+  "tolerance_frac": 0.02,
+  "total": 42024
+}
