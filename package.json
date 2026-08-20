@@ -5,7 +5,16 @@
   "license": "MIT",
   "main": "patch.js",
   "bin": { "claude-inline-images": "patch.js" },
-  "scripts": { "test": "node test/verify.js" },
+  "scripts": {
+    "test": "npm run test:patch && npm run test:extension && npm run test:skill && npm run test:plot && npm run test:doctor",
+    "test:patch": "node test/verify.js",
+    "test:extension": "node test/extension.test.js",
+    "test:skill": "node test/skill.js",
+    "test:plot": "python3 test/test_plot.py",
+    "test:doctor": "node test/doctor.js",
+    "install-skill": "node install-skill.js",
+    "doctor": "node doctor.js"
+  },
   "engines": { "node": ">=18" },
   "keywords": ["claude-code", "vscode", "webview", "markdown", "images", "svg"]
 }
