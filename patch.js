@@ -152,7 +152,8 @@ const EDITS = {
   ],
 };
 
-const ALL_VERSIONS = Object.keys(EDITS).sort();
+// Numeric sort, so v10 orders after v9 rather than before it.
+const ALL_VERSIONS = Object.keys(EDITS).sort((a, b) => Number(a) - Number(b));
 
 // ---------------------------------------------------------------------------
 // Target discovery
@@ -281,6 +282,24 @@ function versionsPresent(dir) {
   );
 }
 
+/**
+ * Resolve a user-supplied version name to a key of EDITS.
+ * Accepts '1', 'v1', 'V1', and undefined/'' (meaning: the version this repo
+ * ships, i.e. VERSION). Anything else throws rather than silently defaulting —
+ * a typo must not quietly apply a version the caller did not ask for.
+ */
+function normalizeVersion(version) {
+  if (version === undefined || version === null || version === '') return VERSION;
+  const v = String(version).trim().replace(/^v/i, '');
+  if (!Object.prototype.hasOwnProperty.call(EDITS, v)) {
+    throw new Error(
+      'unknown patch version "' + version + '" — known versions: ' +
+      ALL_VERSIONS.map((x) => 'v' + x).join(', ')
+    );
+  }
+  return v;
+}
+
 // ---------------------------------------------------------------------------
 // Operations
 // ---------------------------------------------------------------------------
@@ -323,28 +342,50 @@ function status(extDir) {
     extDir: dir,
     patchedVersions: present,
     current: present.includes(VERSION),
+    latestVersion: VERSION,
+    knownVersions: ALL_VERSIONS.slice(),
     katexPatched: bundle.includes('__KATEX_V2_LOADED'),
   };
 }
 
-function apply(extDir) {
+/**
+ * Apply a specific patch version, lifting any other version first so exactly
+ * one edit set is ever present. `version` may be omitted (meaning the version
+ * this repo ships), or named as '1' / 'v1' — that is how a failed experiment is
+ * rolled back to a known-good version instead of only to unpatched.
+ */
+function apply(extDir, version) {
+  const target = normalizeVersion(version);   // validate BEFORE touching anything
   const dir = findExtensionDir(extDir);
   const present = versionsPresent(dir);
 
-  if (present.includes(VERSION)) {
-    return { changed: false, reason: 'already patched at v' + VERSION, extDir: dir };
+  const lifted = [];
+  for (const v of present) {
+    if (v === target) continue;
+    runEdits(dir, v, -1);
+    lifted.push(v);
   }
 
-  const lifted = [];
-  for (const v of present) { runEdits(dir, v, -1); lifted.push(v); }
+  if (present.includes(target)) {
+    return {
+      changed: lifted.length > 0,
+      reason: lifted.length
+        ? 'removed v' + lifted.join(',v') + '; already patched at v' + target
+        : 'already patched at v' + target,
+      version: target,
+      extDir: dir,
+    };
+  }
 
-  const files = runEdits(dir, VERSION, 1);
-  return {
-    changed: true,
-    reason: lifted.length ? 'upgraded from v' + lifted.join(',v') + ' to v' + VERSION : 'patched at v' + VERSION,
-    filesChanged: files,
-    extDir: dir,
-  };
+  const files = runEdits(dir, target, 1);
+  let reason = 'patched at v' + target;
+  if (lifted.length) {
+    const dir_ = lifted.every((v) => Number(v) < Number(target)) ? 'upgraded'
+      : lifted.every((v) => Number(v) > Number(target)) ? 'downgraded'
+      : 'switched';
+    reason = dir_ + ' from v' + lifted.join(',v') + ' to v' + target;
+  }
+  return { changed: true, reason, version: target, filesChanged: files, extDir: dir };
 }
 
 function remove(extDir) {
@@ -357,7 +398,7 @@ function remove(extDir) {
 
 module.exports = {
   apply, remove, status, findExtensionDir, listInstalls, extensionRoots,
-  VERSION, EDITS, occurrences,
+  normalizeVersion, VERSION, ALL_VERSIONS, EDITS, occurrences,
 };
 
 // ---------------------------------------------------------------------------
@@ -370,11 +411,21 @@ if (require.main === module) {
   const dir = i >= 0 ? argv[i + 1] : undefined;
   if (i >= 0) argv.splice(i, 2);
   const cmd = argv[0] || 'status';
+  const arg = argv[1];
 
-  const USAGE = 'usage: node patch.js [apply|remove|status|list] [--ext-dir <path>]';
+  const USAGE =
+    'usage: node patch.js [apply [<version>]|remove|status|list] [--ext-dir <path>]\n' +
+    '  apply            apply the version this repo ships (v' + VERSION + ')\n' +
+    '  apply <version>  apply a named version, e.g. `apply 1` or `apply v1`;\n' +
+    '                   any other version present is lifted first, so a failed\n' +
+    '                   experiment rolls back to a known-good version rather\n' +
+    '                   than to unpatched. known: ' + ALL_VERSIONS.map((v) => 'v' + v).join(', ') + '\n' +
+    '  remove           lift every applied version (exact, byte-identical inverse)\n' +
+    '  status           which versions are applied, and whether it is current\n' +
+    '  list             which installs were found, and which one is selected';
 
   try {
-    const out = cmd === 'apply' ? apply(dir)
+    const out = cmd === 'apply' ? apply(dir, arg)
       : cmd === 'remove' ? remove(dir)
       : cmd === 'status' ? status(dir)
       : cmd === 'list' ? {

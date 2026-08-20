@@ -105,13 +105,34 @@ console.log('\ncoexistence: KaTeX anchor survives our patch');
   check('KaTeX regex matches the pristine call site', () =>
     assert.ok(KATEX_RE.test(pristine)));
 
-  const ours = P.EDITS['2'].find(([f, from]) => f === 'webview/index.js' && from === ',components:{');
-  const patched = pristine.replace(ours[1], ours[2]);
+  // Asserted for EVERY version, not just the newest: a rolled-back install runs
+  // an older edit set and must coexist just as well.
+  for (const v of P.ALL_VERSIONS) {
+    const ours = P.EDITS[v].find(([f, from]) => f === 'webview/index.js' && from === ',components:{');
 
-  check('KaTeX regex still matches after our patch', () =>
-    assert.ok(KATEX_RE.test(patched), 'our insertion broke the KaTeX anchor'));
-  check('our prop lands after remarkPlugins, not before', () =>
-    assert.ok(patched.indexOf('remarkPlugins') < patched.indexOf('urlTransform')));
+    // The insertion point itself: the replacement must be the anchor with our
+    // props prepended, i.e. it ENDS with `,components:{` and nothing of ours
+    // appears before `{remarkPlugins:[`. This is the single property that makes
+    // coexistence work; an edit that moves the insertion earlier fails here.
+    check(`v${v} replacement ends at the ,components:{ insertion point`, () =>
+      assert.ok(ours[2].endsWith(',components:{'),
+        'v' + v + ' inserts somewhere other than immediately before ,components:{'));
+
+    const patched = pristine.replace(ours[1], ours[2]);
+
+    check(`v${v}: KaTeX regex still matches after our patch`, () =>
+      assert.ok(KATEX_RE.test(patched), 'our insertion broke the KaTeX anchor'));
+    check(`v${v}: the literal {remarkPlugins:[ sequence is unbroken`, () =>
+      assert.ok(patched.includes('{remarkPlugins:['),
+        'nothing may be inserted between the `{` and `remarkPlugins:[`'));
+    check(`v${v}: our prop lands after remarkPlugins, not before`, () =>
+      assert.ok(patched.indexOf('remarkPlugins') < patched.indexOf('urlTransform')));
+    check(`v${v}: KaTeX's captured component argument is unchanged`, () => {
+      assert.deepStrictEqual(
+        KATEX_RE.exec(patched).slice(1), KATEX_RE.exec(pristine).slice(1),
+        'our patch changed what the KaTeX anchor captures');
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +200,142 @@ console.log('\nbundle: anchors, syntax, round trip');
 
     fs.rmSync(work, { recursive: true, force: true });
   }
+}
+
+// ---------------------------------------------------------------------------
+// 4. Version selection: apply a NAMED version, downgrade, and round trip.
+//
+// Runs entirely against a synthetic fixture in a temp dir that reproduces the
+// anchors — never the live install, and never a copy of it. That keeps these
+// assertions meaningful on a machine with no Claude Code installed, and keeps
+// them honest about each version independently rather than only the newest.
+// ---------------------------------------------------------------------------
+
+// A minimal but syntactically valid stand-in for the two patched files. It
+// embeds the exact anchor strings from patch.js, so if an anchor ever changes
+// the fixture changes with it and cannot silently drift.
+function makeFixture() {
+  const A_IMG = P.EDITS['1'].find(([f, from]) => f === 'webview/index.js' && from.startsWith('img:'))[1];
+  const A_LRR = P.EDITS['2'].find(([f, from]) => f === 'extension.js' && from.startsWith('localResourceRoots:'))[1];
+  const A_CSP = P.EDITS['2'].find(([f, from]) => f === 'extension.js' && from.startsWith('content='))[1];
+
+  const bundle =
+    '"use strict";\n' +
+    'var b=function(){return null};var QQ=1,XA=2;\n' +
+    'function render(){return b(QQ,{remarkPlugins:[XA],components:{' + A_IMG + '}})}\n' +
+    'module.exports={render};\n';
+
+  const lrrBlock = (n) => '  root' + n + '(){return {enableScripts:true,' + A_LRR + '}}\n';
+  const extension =
+    '"use strict";\n' +
+    'const Lt=require("vscode");\n' +
+    'class Panel{\n' +
+    lrrBlock(0) + lrrBlock(1) + lrrBlock(2) + lrrBlock(3) +
+    '  html(e,p,f,m,u,g){return `<!DOCTYPE html><html><head>\n' +
+    '        <meta http-equiv="Content-Security-Policy" ' + A_CSP + '\n' +
+    '      </head><body></body></html>`}\n' +
+    '}\n' +
+    'module.exports={Panel};\n';
+
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'cii-fixture-'));
+  fs.mkdirSync(path.join(work, 'webview'), { recursive: true });
+  fs.writeFileSync(path.join(work, 'webview', 'index.js'), bundle, 'utf8');
+  fs.writeFileSync(path.join(work, 'extension.js'), extension, 'utf8');
+  return work;
+}
+
+const FIXTURE_FILES = ['webview/index.js', 'extension.js'];
+const snapshot = (dir) => Object.fromEntries(
+  FIXTURE_FILES.map((rel) => [rel, fs.readFileSync(path.join(dir, rel), 'utf8')]));
+
+console.log('\nversion selection: named apply, downgrade, per-version round trip');
+{
+  const work = makeFixture();
+  const pristine = snapshot(work);
+
+  // The fixture itself must reproduce every anchor at the expected count,
+  // otherwise the assertions below would be testing nothing.
+  for (const v of P.ALL_VERSIONS) {
+    for (const [rel, from, , count] of P.EDITS[v]) {
+      check(`fixture: v${v} anchor in ${rel} occurs ${count}x`, () =>
+        assert.strictEqual(P.occurrences(pristine[rel], from), count));
+    }
+  }
+
+  // Each version applies, parses, is reported by status(), and round trips.
+  for (const v of P.ALL_VERSIONS) {
+    check(`apply(dir, "${v}") applies exactly v${v}`, () => {
+      const r = P.apply(work, v);
+      assert.ok(r.changed, r.reason);
+      assert.strictEqual(r.version, v);
+      const s = P.status(work);
+      assert.deepStrictEqual(s.patchedVersions, [v], JSON.stringify(s.patchedVersions));
+      assert.strictEqual(s.current, v === P.VERSION);
+    });
+    check(`v${v} patched files parse`, () => {
+      for (const rel of FIXTURE_FILES) {
+        new vm.Script(fs.readFileSync(path.join(work, rel), 'utf8'), { filename: rel });
+      }
+    });
+    check(`remove() after v${v} restores byte-identical files`, () => {
+      P.remove(work);
+      assert.deepStrictEqual(P.status(work).patchedVersions, []);
+      const after = snapshot(work);
+      for (const rel of FIXTURE_FILES) {
+        assert.strictEqual(after[rel], pristine[rel], rel + ' differs after v' + v + ' round trip');
+      }
+    });
+  }
+
+  // The rollback story: v1 -> v2 -> back to v1, never two edit sets at once.
+  check('upgrade v1 -> v2 leaves only v2 applied', () => {
+    P.apply(work, '1');
+    const r = P.apply(work, '2');
+    assert.ok(r.changed, r.reason);
+    assert.deepStrictEqual(P.status(work).patchedVersions, ['2']);
+  });
+  check('downgrade v2 -> v1 leaves only v1 applied', () => {
+    const r = P.apply(work, 'v1');            // "v1" spelling accepted too
+    assert.ok(r.changed, r.reason);
+    assert.strictEqual(r.version, '1');
+    const s = P.status(work);
+    assert.deepStrictEqual(s.patchedVersions, ['1']);
+    assert.strictEqual(s.current, false, 'v1 must not be reported as current');
+  });
+  check('downgraded files still parse', () => {
+    for (const rel of FIXTURE_FILES) {
+      new vm.Script(fs.readFileSync(path.join(work, rel), 'utf8'), { filename: rel });
+    }
+  });
+  check('downgrade left no v2 residue in extension.js', () => {
+    const ext = fs.readFileSync(path.join(work, 'extension.js'), 'utf8');
+    assert.strictEqual(ext, pristine['extension.js'], 'v2 extension.js edits were not lifted');
+  });
+  check('remove() after a downgrade still returns pristine', () => {
+    P.remove(work);
+    const after = snapshot(work);
+    for (const rel of FIXTURE_FILES) assert.strictEqual(after[rel], pristine[rel], rel);
+  });
+
+  check('re-applying the same version is a no-op', () => {
+    P.apply(work, '1');
+    const r = P.apply(work, '1');
+    assert.strictEqual(r.changed, false, r.reason);
+    assert.deepStrictEqual(P.status(work).patchedVersions, ['1']);
+    P.remove(work);
+  });
+  check('apply() with no version still applies the shipped VERSION', () => {
+    const r = P.apply(work);
+    assert.strictEqual(r.version, P.VERSION);
+    assert.strictEqual(P.status(work).current, true);
+    P.remove(work);
+  });
+  check('an unknown version is rejected without touching the files', () => {
+    assert.throws(() => P.apply(work, '99'), /unknown patch version/);
+    assert.deepStrictEqual(snapshot(work), pristine);
+  });
+
+  fs.rmSync(work, { recursive: true, force: true });
 }
 
 console.log(`\n${failures ? failures + ' FAILURE(S)' : 'all checks passed'}` +
