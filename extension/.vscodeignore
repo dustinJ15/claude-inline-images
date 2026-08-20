@@ -1,0 +1,11 @@
+# Everything the extension does not need at runtime.
+# The package must contain: package.json, README, CHANGELOG, LICENSE, icon,
+# src/extension.js, src/uninstall.js, and the vendored src/patch.js.
+.vscode/**
+.gitignore
+**/*.map
+**/tsconfig.json
+**/.eslintrc*
+node_modules/**
+test/**
+**/*.test.js

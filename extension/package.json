@@ -1,0 +1,50 @@
+{
+  "name": "claude-inline-images",
+  "displayName": "Claude Inline Images",
+  "description": "Renders ![](…) images inline in the Claude Code chat panel by patching the installed anthropic.claude-code extension, and re-applies that patch whenever an update removes it. Modifies another extension's files on disk; fully reversible, and undone automatically on uninstall.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "extensionDependencies": [
+    "anthropic.claude-code"
+  ],
+  "scripts": {
+    "vscode:uninstall": "node ./src/uninstall.js",
+    "test": "node ../test/verify.js && node ../test/extension.test.js"
+  },
+  "contributes": {
+    "configuration": {
+      "title": "Claude Inline Images",
+      "properties": {
+        "claudeInlineImages.autoPatch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Re-apply the inline-image patch to the installed Claude Code extension automatically at startup when it is missing. Turn this off to leave the Claude Code files untouched; the apply/remove commands still work on demand."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "claudeInlineImages.apply",
+        "title": "Claude Inline Images: Apply Patch"
+      },
+      {
+        "command": "claudeInlineImages.remove",
+        "title": "Claude Inline Images: Remove Patch"
+      },
+      {
+        "command": "claudeInlineImages.status",
+        "title": "Claude Inline Images: Show Patch Status"
+      }
+    ]
+  }
+}
