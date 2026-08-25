@@ -119,8 +119,18 @@ function resolveExtensionDir(deps) {
 function liftPartialVersions(patch, extDir) {
   const repaired = [];
 
+  // The edit strings depend on the minified names this particular bundle uses,
+  // so they are resolved from the install rather than read from a constant. An
+  // unreadable bundle means there is nothing recognisable to lift.
+  let table;
+  try {
+    table = patch.editsFor(patch.resolveIdents(extDir));
+  } catch (_) {
+    return repaired;
+  }
+
   for (const version of patch.ALL_VERSIONS) {
-    const edits = patch.EDITS[version];
+    const edits = table[version];
 
     const counts = edits.map(([rel, , to]) => {
       try {

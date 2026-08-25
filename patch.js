@@ -68,23 +68,89 @@ const VERSION = '2';
 
 const A_COMPONENTS = ',components:{';
 
-const A_IMG =
-  'img:({src:l,alt:c})=>{if(l?.startsWith("data:"))return b("img",{src:l,alt:c||""});' +
-  'return b("span",{title:`Image blocked: ${l||"unknown"}`,children:"[Image]"})}';
+// ---------------------------------------------------------------------------
+// Identifier probes.
+//
+// The bundle is minified, and esbuild rerolls its short names on every release
+// (the vscode module alias has been `Lt`, `Nt`, and `S4` across three Claude
+// Code versions). So nothing here anchors on a minified name: each probe
+// captures whatever name this particular bundle happens to use, and the edit
+// strings are built from the captures. Every probe is chosen to match in BOTH
+// the patched and the unpatched state, so `remove` resolves names too.
+// ---------------------------------------------------------------------------
 
-const A_LRR =
-  'localResourceRoots:[Lt.Uri.joinPath(this.extensionUri,"webview"),' +
-  'Lt.Uri.joinPath(this.extensionUri,"resources")]';
+const ID = '[A-Za-z_$][A-Za-z0-9_$]*';
 
-// The chat webview's CSP line. Deliberately NOT anchored on the viewport <meta>
-// tag: that appears TWICE (the plan-preview webview has its own template), and
-// patching both would corrupt the plan preview.
-const A_CSP =
-  'content="default-src \'none\'; ${p}; ${f}; ${m}; script-src \'nonce-${u}\'; ${g};">';
+// The vscode module alias, from the webview's localResourceRoots. 4 sites.
+const P_VS = new RegExp(
+  'localResourceRoots:\\[(' + ID + ')\\.Uri\\.joinPath\\(this\\.extensionUri,"webview"\\)', 'g');
+
+// The webview parameter of getHtmlForWebview — `e` once, `$` in 2.1.245.
+const P_WV = new RegExp('getHtmlForWebview\\((' + ID + ')[,)]', 'g');
+
+// The markdown img component: its two destructured params and the JSX factory.
+// Anchored on the "[Image]" fallback, which the patch leaves untouched, with a
+// bounded lazy gap so the patched body (~470 chars) still matches.
+const P_IMG = new RegExp(
+  'img:\\(\\{src:(' + ID + '),alt:(' + ID + ')\\}\\)=>\\{[\\s\\S]{0,900}?' +
+  'return (' + ID + ')\\("span",\\{title:`Image blocked', 'g');
+
+// The chat webview's CSP line and its five interpolated names. Deliberately
+// NOT anchored on the viewport <meta> tag: that appears TWICE (the plan-preview
+// webview has its own template), and patching both would corrupt the preview.
+// This shape appears once; the plan preview's CSP is a literal, not a template.
+const P_CSP = new RegExp(
+  'content="default-src \'none\'; \\$\\{(' + ID + ')\\}; \\$\\{(' + ID + ')\\}; \\$\\{(' + ID + ')\\}; ' +
+  'script-src \'nonce-\\$\\{(' + ID + ')\\}\'; \\$\\{(' + ID + ')\\};">', 'g');
+
+/**
+ * Run one probe over `src` and return its capture groups.
+ * Throws unless it matches exactly `count` times with identical captures every
+ * time — an ambiguous or absent probe must abort, never guess.
+ */
+function probe(src, re, count, what) {
+  const seen = [];
+  for (const m of src.matchAll(re)) seen.push(m.slice(1));
+  if (seen.length !== count) {
+    throw new Error(
+      'could not read the bundle: ' + what + ' matched ' + seen.length + 'x, expected ' +
+      count + 'x — bundle shape changed, refusing to write.');
+  }
+  const first = JSON.stringify(seen[0]);
+  if (seen.some((c) => JSON.stringify(c) !== first)) {
+    throw new Error('could not read the bundle: ' + what + ' captured conflicting names ' +
+      JSON.stringify(seen) + ' — refusing to write.');
+  }
+  return seen[0];
+}
+
+/** Read both bundles once and resolve every minified name the edits need. */
+function resolveIdents(extDir) {
+  const ext = fs.readFileSync(path.join(extDir, 'extension.js'), 'utf8');
+  const web = fs.readFileSync(path.join(extDir, 'webview', 'index.js'), 'utf8');
+  const [vs] = probe(ext, P_VS, 4, 'localResourceRoots');
+  const [wv] = probe(ext, P_WV, 1, 'getHtmlForWebview');
+  const csp = probe(ext, P_CSP, 1, 'the chat CSP meta tag');
+  const [src, alt, h] = probe(web, P_IMG, 1, 'the markdown img component');
+  return { vs, wv, csp, src, alt, h };
+}
 
 // ---------------------------------------------------------------------------
-// Injected fragments
+// Anchors and injected fragments, as functions of the resolved names.
 // ---------------------------------------------------------------------------
+
+const A_LRR = (i) =>
+  'localResourceRoots:[' + i.vs + '.Uri.joinPath(this.extensionUri,"webview"),' +
+  i.vs + '.Uri.joinPath(this.extensionUri,"resources")]';
+
+const A_IMG = (i) =>
+  'img:({src:' + i.src + ',alt:' + i.alt + '})=>{if(' + i.src + '?.startsWith("data:"))' +
+  'return ' + i.h + '("img",{src:' + i.src + ',alt:' + i.alt + '||""});' +
+  'return ' + i.h + '("span",{title:`Image blocked: ${' + i.src + '||"unknown"}`,children:"[Image]"})}';
+
+const A_CSP = (i) =>
+  'content="default-src \'none\'; ${' + i.csp[0] + '}; ${' + i.csp[1] + '}; ${' + i.csp[2] + '}; ' +
+  'script-src \'nonce-${' + i.csp[3] + '}\'; ${' + i.csp[4] + '};">';
 
 // Mirrors defaultUrlTransform, plus data:image/*. Identical text in v1 and v2.
 const URLT_BODY =
@@ -102,58 +168,64 @@ const URLT_BODY =
 // collide with KaTeX's CSS append.
 const IMG_STYLE = '{maxWidth:"100%",height:"auto",display:"block",margin:"8px 0",borderRadius:"6px"}';
 
-const V1_IMG =
-  'img:({src:l,alt:c})=>{if(l?.startsWith("data:"))return b("img",{src:l,alt:c||"",' +
-  'style:' + IMG_STYLE + '});' +
-  'return b("span",{title:`Image blocked: ${l||"unknown"}`,children:"[Image]"})}';
+const V1_IMG = (i) =>
+  'img:({src:' + i.src + ',alt:' + i.alt + '})=>{if(' + i.src + '?.startsWith("data:"))' +
+  'return ' + i.h + '("img",{src:' + i.src + ',alt:' + i.alt + '||"",style:' + IMG_STYLE + '});' +
+  'return ' + i.h + '("span",{title:`Image blocked: ${' + i.src + '||"unknown"}`,children:"[Image]"})}';
 
 // v2: also resolve scheme-less paths against the workspace base injected below.
 // The CSS attribute selector is deliberately unquoted (meta[name=claude-ws-base])
 // so this fragment needs no nested quote escaping.
-const V2_IMG =
-  'img:({src:l,alt:c})=>{let S=' + IMG_STYLE + ';' +
-  'if(l?.startsWith("data:"))return b("img",{src:l,alt:c||"",style:S});' +
-  'if(l&&!/^[a-z][a-z0-9+.-]*:/i.test(l)){' +
+const V2_IMG = (i) =>
+  'img:({src:' + i.src + ',alt:' + i.alt + '})=>{let S=' + IMG_STYLE + ';' +
+  'if(' + i.src + '?.startsWith("data:"))return ' + i.h + '("img",{src:' + i.src + ',alt:' + i.alt + '||"",style:S});' +
+  'if(' + i.src + '&&!/^[a-z][a-z0-9+.-]*:/i.test(' + i.src + ')){' +
   'if(window.__CII_WS===void 0)window.__CII_WS=(document.querySelector("meta[name=claude-ws-base]")||{}).content||"";' +
-  'if(window.__CII_WS)return b("img",{src:window.__CII_WS.replace(/\\/$/,"")+"/"+l.replace(/^\\.?\\//,""),alt:c||"",style:S})}' +
-  'return b("span",{title:`Image blocked: ${l||"unknown"}`,children:"[Image]"})}';
+  'if(window.__CII_WS)return ' + i.h + '("img",{src:window.__CII_WS.replace(/\\/$/,"")+"/"+' + i.src + '.replace(/^\\.?\\//,""),alt:' + i.alt + '||"",style:S})}' +
+  'return ' + i.h + '("span",{title:`Image blocked: ${' + i.src + '||"unknown"}`,children:"[Image]"})}';
 
 // Widen the webview's allowed resource roots to include the open workspace
 // folder(s), so webview URIs under the workspace resolve. No CSP change is
 // needed: img-src already contains ${cspSource}.
-const R_LRR = (v) =>
-  'localResourceRoots:[Lt.Uri.joinPath(this.extensionUri,"webview"),' +
-  'Lt.Uri.joinPath(this.extensionUri,"resources"),' +
-  '.../*claude-inline-images:v' + v + '*/((Lt.workspace.workspaceFolders||[]).map((W)=>W.uri))]';
+const R_LRR = (i, v) =>
+  'localResourceRoots:[' + i.vs + '.Uri.joinPath(this.extensionUri,"webview"),' +
+  i.vs + '.Uri.joinPath(this.extensionUri,"resources"),' +
+  '.../*claude-inline-images:v' + v + '*/((' + i.vs + '.workspace.workspaceFolders||[]).map((W)=>W.uri))]';
 
 // Publish the workspace root as a webview URI. Built with the webview's own
 // asWebviewUri so the vscode-cdn host is never hardcoded.
-const R_CSP = (v) =>
-  A_CSP +
+const R_CSP = (i, v) =>
+  A_CSP(i) +
   '\n        <meta name="claude-ws-base" data-cii="v' + v + '" content="${' +
-  '(Lt.workspace.workspaceFolders&&Lt.workspace.workspaceFolders[0])' +
-  '?e.asWebviewUri(Lt.workspace.workspaceFolders[0].uri).toString():""' +
+  '(' + i.vs + '.workspace.workspaceFolders&&' + i.vs + '.workspace.workspaceFolders[0])' +
+  '?' + i.wv + '.asWebviewUri(' + i.vs + '.workspace.workspaceFolders[0].uri).toString():""' +
   '}">';
 
 // ---------------------------------------------------------------------------
-// Edit table, per version. Each entry: [file, original, replacement, count]
+// Edit table, per version. Each entry: [file, original, replacement, count].
+// Built per-install from the resolved names; the strings themselves are exact,
+// so the staging, counting, and byte-identical inverse below are unchanged.
 // ---------------------------------------------------------------------------
 
-const EDITS = {
-  '1': [
-    ['webview/index.js', A_COMPONENTS, ',/*claude-inline-images:v1*/' + URLT_BODY + ',components:{', 1],
-    ['webview/index.js', A_IMG, V1_IMG, 1],
-  ],
-  '2': [
-    ['webview/index.js', A_COMPONENTS, ',/*claude-inline-images:v2*/' + URLT_BODY + ',components:{', 1],
-    ['webview/index.js', A_IMG, V2_IMG, 1],
-    ['extension.js', A_LRR, R_LRR('2'), 4],
-    ['extension.js', A_CSP, R_CSP('2'), 1],
-  ],
-};
+function editsFor(i) {
+  return {
+    '1': [
+      ['webview/index.js', A_COMPONENTS, ',/*claude-inline-images:v1*/' + URLT_BODY + ',components:{', 1],
+      ['webview/index.js', A_IMG(i), V1_IMG(i), 1],
+    ],
+    '2': [
+      ['webview/index.js', A_COMPONENTS, ',/*claude-inline-images:v2*/' + URLT_BODY + ',components:{', 1],
+      ['webview/index.js', A_IMG(i), V2_IMG(i), 1],
+      ['extension.js', A_LRR(i), R_LRR(i, '2'), 4],
+      ['extension.js', A_CSP(i), R_CSP(i, '2'), 1],
+    ],
+  };
+}
+
+const ALL_VERSIONS_SRC = ['1', '2'];
 
 // Numeric sort, so v10 orders after v9 rather than before it.
-const ALL_VERSIONS = Object.keys(EDITS).sort((a, b) => Number(a) - Number(b));
+const ALL_VERSIONS = ALL_VERSIONS_SRC.slice().sort((a, b) => Number(a) - Number(b));
 
 // ---------------------------------------------------------------------------
 // Target discovery
@@ -273,9 +345,15 @@ function writeAtomic(file, contents) {
   fs.renameSync(tmp, file);
 }
 
-function versionsPresent(dir) {
+function versionsPresent(dir, idents) {
+  let edits;
+  try {
+    edits = editsFor(idents || resolveIdents(dir));
+  } catch (_) {
+    return [];                      // unreadable bundle — report as unpatched
+  }
   return ALL_VERSIONS.filter((v) =>
-    EDITS[v].every(([rel, , to]) => {
+    edits[v].every(([rel, , to]) => {
       const f = path.join(dir, rel);
       return fs.existsSync(f) && fs.readFileSync(f, 'utf8').includes(to);
     })
@@ -283,7 +361,7 @@ function versionsPresent(dir) {
 }
 
 /**
- * Resolve a user-supplied version name to a key of EDITS.
+ * Resolve a user-supplied version name to a known patch version.
  * Accepts '1', 'v1', 'V1', and undefined/'' (meaning: the version this repo
  * ships, i.e. VERSION). Anything else throws rather than silently defaulting —
  * a typo must not quietly apply a version the caller did not ask for.
@@ -291,7 +369,7 @@ function versionsPresent(dir) {
 function normalizeVersion(version) {
   if (version === undefined || version === null || version === '') return VERSION;
   const v = String(version).trim().replace(/^v/i, '');
-  if (!Object.prototype.hasOwnProperty.call(EDITS, v)) {
+  if (!ALL_VERSIONS.includes(v)) {
     throw new Error(
       'unknown patch version "' + version + '" — known versions: ' +
       ALL_VERSIONS.map((x) => 'v' + x).join(', ')
@@ -307,8 +385,8 @@ function normalizeVersion(version) {
 // Apply an edit set in one direction. direction === -1 reverses it.
 // Every file is staged in memory and every anchor count validated BEFORE any
 // write, so a shape change aborts without leaving a half-patched bundle.
-function runEdits(extDir, version, direction) {
-  const edits = EDITS[version];
+function runEdits(extDir, version, direction, idents) {
+  const edits = editsFor(idents || resolveIdents(extDir))[version];
   const staged = new Map();
 
   const read = (rel) => {
@@ -337,9 +415,16 @@ function runEdits(extDir, version, direction) {
 function status(extDir) {
   const dir = findExtensionDir(extDir);
   const bundle = fs.readFileSync(path.join(dir, 'webview', 'index.js'), 'utf8');
-  const present = versionsPresent(dir);
+  let idents = null, identError = null;
+  try {
+    idents = resolveIdents(dir);
+  } catch (e) {
+    identError = e.message;
+  }
+  const present = versionsPresent(dir, idents);
   return {
     extDir: dir,
+    identError,
     patchedVersions: present,
     current: present.includes(VERSION),
     latestVersion: VERSION,
@@ -357,12 +442,13 @@ function status(extDir) {
 function apply(extDir, version) {
   const target = normalizeVersion(version);   // validate BEFORE touching anything
   const dir = findExtensionDir(extDir);
-  const present = versionsPresent(dir);
+  const idents = resolveIdents(dir);          // throws on a shape change, before any write
+  const present = versionsPresent(dir, idents);
 
   const lifted = [];
   for (const v of present) {
     if (v === target) continue;
-    runEdits(dir, v, -1);
+    runEdits(dir, v, -1, idents);
     lifted.push(v);
   }
 
@@ -377,7 +463,7 @@ function apply(extDir, version) {
     };
   }
 
-  const files = runEdits(dir, target, 1);
+  const files = runEdits(dir, target, 1, idents);
   let reason = 'patched at v' + target;
   if (lifted.length) {
     const dir_ = lifted.every((v) => Number(v) < Number(target)) ? 'upgraded'
@@ -390,15 +476,16 @@ function apply(extDir, version) {
 
 function remove(extDir) {
   const dir = findExtensionDir(extDir);
-  const present = versionsPresent(dir);
+  const idents = resolveIdents(dir);
+  const present = versionsPresent(dir, idents);
   if (!present.length) return { changed: false, reason: 'not patched', extDir: dir };
-  for (const v of present) runEdits(dir, v, -1);
+  for (const v of present) runEdits(dir, v, -1, idents);
   return { changed: true, reason: 'removed v' + present.join(',v'), extDir: dir };
 }
 
 module.exports = {
   apply, remove, status, findExtensionDir, listInstalls, extensionRoots,
-  normalizeVersion, VERSION, ALL_VERSIONS, EDITS, occurrences,
+  normalizeVersion, VERSION, ALL_VERSIONS, editsFor, resolveIdents, occurrences,
 };
 
 // ---------------------------------------------------------------------------

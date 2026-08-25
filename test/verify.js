@@ -45,8 +45,18 @@ function skip(name, why) {
 // test cannot drift from the shipped fragment.
 // ---------------------------------------------------------------------------
 
+// Two realistic minified-name sets. esbuild rerolls these on every Claude Code
+// release (`Lt` -> `Nt` -> `S4` across three versions), so every assertion below
+// runs against BOTH: an edit table that can only handle one of them is the exact
+// regression that broke patching on 2.1.245.
+const IDENT_SETS = {
+  'old names': { vs: 'Lt', wv: 'e', src: 'l', alt: 'c', h: 'b', csp: ['p', 'f', 'm', 'u', 'g'] },
+  '2.1.245 names': { vs: 'S4', wv: '$', src: 'z', alt: 'U', h: 'j', csp: ['B', 'N', 'q', 'U', 'D'] },
+};
+const IDENTS = IDENT_SETS['old names'];
+
 function injectedUrlTransform() {
-  const frag = P.EDITS['2'].find(([f, , to]) => f === 'webview/index.js' && to.includes('urlTransform'))[2];
+  const frag = P.editsFor(IDENTS)['2'].find(([f, , to]) => f === 'webview/index.js' && to.includes('urlTransform'))[2];
   const body = frag.slice(frag.indexOf('urlTransform:'), frag.lastIndexOf(',components:{'));
   return vm.runInNewContext('({' + body + '})').urlTransform;
 }
@@ -108,7 +118,7 @@ console.log('\ncoexistence: KaTeX anchor survives our patch');
   // Asserted for EVERY version, not just the newest: a rolled-back install runs
   // an older edit set and must coexist just as well.
   for (const v of P.ALL_VERSIONS) {
-    const ours = P.EDITS[v].find(([f, from]) => f === 'webview/index.js' && from === ',components:{');
+    const ours = P.editsFor(IDENTS)[v].find(([f, from]) => f === 'webview/index.js' && from === ',components:{');
 
     // The insertion point itself: the replacement must be the anchor with our
     // props prepended, i.e. it ENDS with `,components:{` and nothing of ours
@@ -168,7 +178,7 @@ console.log('\nbundle: anchors, syntax, round trip');
     };
 
     // Anchor uniqueness — the whole safety story rests on this.
-    for (const [rel, from, , count] of P.EDITS[P.VERSION]) {
+    for (const [rel, from, , count] of P.editsFor(P.resolveIdents(work))[P.VERSION]) {
       check(`anchor in ${rel} occurs exactly ${count}x`, () =>
         assert.strictEqual(P.occurrences(before[rel], from), count));
     }
@@ -214,24 +224,25 @@ console.log('\nbundle: anchors, syntax, round trip');
 // A minimal but syntactically valid stand-in for the two patched files. It
 // embeds the exact anchor strings from patch.js, so if an anchor ever changes
 // the fixture changes with it and cannot silently drift.
-function makeFixture() {
-  const A_IMG = P.EDITS['1'].find(([f, from]) => f === 'webview/index.js' && from.startsWith('img:'))[1];
-  const A_LRR = P.EDITS['2'].find(([f, from]) => f === 'extension.js' && from.startsWith('localResourceRoots:'))[1];
-  const A_CSP = P.EDITS['2'].find(([f, from]) => f === 'extension.js' && from.startsWith('content='))[1];
+function makeFixture(ids) {
+  const edits = P.editsFor(ids);
+  const A_IMG = edits['1'].find(([f, from]) => f === 'webview/index.js' && from.startsWith('img:'))[1];
+  const A_LRR = edits['2'].find(([f, from]) => f === 'extension.js' && from.startsWith('localResourceRoots:'))[1];
+  const A_CSP = edits['2'].find(([f, from]) => f === 'extension.js' && from.startsWith('content='))[1];
 
   const bundle =
     '"use strict";\n' +
-    'var b=function(){return null};var QQ=1,XA=2;\n' +
-    'function render(){return b(QQ,{remarkPlugins:[XA],components:{' + A_IMG + '}})}\n' +
+    'var ' + ids.h + '=function(){return null};var QQ=1,XA=2;\n' +
+    'function render(){return ' + ids.h + '(QQ,{remarkPlugins:[XA],components:{' + A_IMG + '}})}\n' +
     'module.exports={render};\n';
 
   const lrrBlock = (n) => '  root' + n + '(){return {enableScripts:true,' + A_LRR + '}}\n';
   const extension =
     '"use strict";\n' +
-    'const Lt=require("vscode");\n' +
+    'const ' + ids.vs + '=require("vscode");\n' +
     'class Panel{\n' +
     lrrBlock(0) + lrrBlock(1) + lrrBlock(2) + lrrBlock(3) +
-    '  html(e,p,f,m,u,g){return `<!DOCTYPE html><html><head>\n' +
+    '  getHtmlForWebview(' + ids.wv + ',' + ids.csp.join(',') + '){return `<!DOCTYPE html><html><head>\n' +
     '        <meta http-equiv="Content-Security-Policy" ' + A_CSP + '\n' +
     '      </head><body></body></html>`}\n' +
     '}\n' +
@@ -248,16 +259,17 @@ const FIXTURE_FILES = ['webview/index.js', 'extension.js'];
 const snapshot = (dir) => Object.fromEntries(
   FIXTURE_FILES.map((rel) => [rel, fs.readFileSync(path.join(dir, rel), 'utf8')]));
 
-console.log('\nversion selection: named apply, downgrade, per-version round trip');
+for (const [setName, ids] of Object.entries(IDENT_SETS)) {
+console.log(`\nversion selection (${setName}): named apply, downgrade, per-version round trip`);
 {
-  const work = makeFixture();
+  const work = makeFixture(ids);
   const pristine = snapshot(work);
 
   // The fixture itself must reproduce every anchor at the expected count,
   // otherwise the assertions below would be testing nothing.
   for (const v of P.ALL_VERSIONS) {
-    for (const [rel, from, , count] of P.EDITS[v]) {
-      check(`fixture: v${v} anchor in ${rel} occurs ${count}x`, () =>
+    for (const [rel, from, , count] of P.editsFor(ids)[v]) {
+      check(`fixture(${setName}): v${v} anchor in ${rel} occurs ${count}x`, () =>
         assert.strictEqual(P.occurrences(pristine[rel], from), count));
     }
   }
@@ -336,6 +348,7 @@ console.log('\nversion selection: named apply, downgrade, per-version round trip
   });
 
   fs.rmSync(work, { recursive: true, force: true });
+}
 }
 
 console.log(`\n${failures ? failures + ' FAILURE(S)' : 'all checks passed'}` +

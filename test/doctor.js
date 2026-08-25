@@ -32,22 +32,26 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cii-doctor-'));
 
 // Built from the anchors themselves, exactly as test/verify.js does, so this
 // file never carries a second copy of the edit table.
+// Minified names as of Claude Code 2.1.245; esbuild rerolls them every release.
+const IDENTS = { vs: 'S4', wv: '$', src: 'z', alt: 'U', h: 'j', csp: ['B', 'N', 'q', 'U', 'D'] };
+
 function makeExtFixture() {
-  const A_IMG = P.EDITS['1'].find(([f, from]) => f === 'webview/index.js' && from.startsWith('img:'))[1];
-  const A_LRR = P.EDITS['2'].find(([f, from]) => f === 'extension.js' && from.startsWith('localResourceRoots:'))[1];
-  const A_CSP = P.EDITS['2'].find(([f, from]) => f === 'extension.js' && from.startsWith('content='))[1];
+  const edits = P.editsFor(IDENTS);
+  const A_IMG = edits['1'].find(([f, from]) => f === 'webview/index.js' && from.startsWith('img:'))[1];
+  const A_LRR = edits['2'].find(([f, from]) => f === 'extension.js' && from.startsWith('localResourceRoots:'))[1];
+  const A_CSP = edits['2'].find(([f, from]) => f === 'extension.js' && from.startsWith('content='))[1];
 
   const bundle =
     '"use strict";\n' +
-    'var b=function(){return null};var QQ=1,XA=2;\n' +
-    'function render(){return b(QQ,{remarkPlugins:[XA],components:{' + A_IMG + '}})}\n' +
+    'var ' + IDENTS.h + '=function(){return null};var QQ=1,XA=2;\n' +
+    'function render(){return ' + IDENTS.h + '(QQ,{remarkPlugins:[XA],components:{' + A_IMG + '}})}\n' +
     'module.exports={render};\n';
   const lrrBlock = (i) => '  root' + i + '(){return {enableScripts:true,' + A_LRR + '}}\n';
   const extension =
     '"use strict";\n' +
-    'const Lt=require("vscode");\n' +
+    'const ' + IDENTS.vs + '=require("vscode");\n' +
     'class Panel{\n' + lrrBlock(0) + lrrBlock(1) + lrrBlock(2) + lrrBlock(3) +
-    '  html(e,p,f,m,u,g){return `<!DOCTYPE html><html><head>\n' +
+    '  getHtmlForWebview(' + IDENTS.wv + ',' + IDENTS.csp.join(',') + '){return `<!DOCTYPE html><html><head>\n' +
     '        <meta http-equiv="Content-Security-Policy" ' + A_CSP + '\n' +
     '      </head><body></body></html>`}\n' +
     '}\nmodule.exports={Panel};\n';
